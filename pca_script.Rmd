@@ -1,0 +1,189 @@
+---
+title: "How to use and understand PCA in R"
+author: "Rick Radewagen"
+date: "25 January 2017"
+output:
+  html_document: default
+---
+
+```{r , include=FALSE}
+library(dplyr)
+library(ggplot2)
+library(corrgram)
+```
+
+# 0. What can you take away from here?
+
+In this notebook you will see:
+
+* **how you can use PCA in R**
+* **one awesome method to transform data**
+* **one approach to automate feature selection**
+* **what happens to the correlation matrix after PCA was applied**
+* **what is affecting grades in school**
+
+
+If you already know all of this, I would be more than happy to get your feedback. If you don't and this is helpful, please leave a comment or (not xor) upvote. ;)
+
+## Principle Component Analysis 
+
+PCA is used to identify variables in a dataset that represent the most information about the dataset. In this dataset a variable that has a lot of information is e.g. age, because it contains students from 15 to 22 and it is more or less normally distributed. A variable that matters less is e.g. paid _(extra paid classes within the course subject)_. 94% of the students do not have these extra classes. A more extreme case is if I would add the variable country, all students are in the same country, so it does not add any value in describing a student. 
+
+PCA ignores all these real world representations and just calculates new variables(principle components) that are optimized for the highest variance in the new variable. If you want more details please check out this fantastic answer on stackexchange:
+
+http://stats.stackexchange.com/a/140579
+
+
+# 1. Load the data
+Let's take the set of students that study portugese, because it's bigger. 
+```{r}
+ds=read.table("../input/student-por.csv",sep=",",header=TRUE)
+```
+
+# 2. Take a look at the structure
+```{r}
+str(ds)
+```
+
+We can see lot's of numerical variables, which is good and a couple of categorial ones, which need to be transformed into numerical ones later on. Good news is that the categorical variables have only few levels, so we do not need to care to much about creating too many flag variables.
+
+# 3. What is important?
+Well, we do not know. Let's find out by calculating the correlation with the target variable Grades. First build the average of the three grades to have a clear target variable. 
+
+```{r}
+ds<- ds %>% mutate(y = (G1+G2+G3)/3) %>% select(-G1, -G2, -G3)
+```
+
+The next line of code is the most powerful data-transformation line I've ever written. *If you take away anything, let it be _model.matrix()_* With this call you can transform all categorial variables into numerical flag values. 
+you could also write model.matrix( ~ fvar1 + fvar4 - 1, data=ds ) to specify which categorical variables you want to transform.
+This spep is necessary to easily compute the pearson correlation for all variables, otherwise you would need to use a blended approach with Chi-square.  
+
+```{r}
+tds <- data.frame(model.matrix( ~ .- 1, data=ds)) 
+```
+
+Let's see how many variables are actually suited to predict y. 
+```{r}
+cor_tds <- cor(tds, tds, method = "pearson")
+cor_df<- data.frame(cor=cor_tds[1:40,41], varn = names(cor_tds[1:40,41])) 
+cor_df<- cor_df%>%mutate(cor_abs = abs(cor)) %>% arrange(desc(cor_abs))
+plot(cor_df$cor_abs, type="l")
+```
+
+Since this is a social study we should not expect really high correlation (predicton power) for each variable, but roughly 8 variables with a correlation between 0.2 and 0.4 seems alright to me. 
+
+# 4. Feature selection based on correlation
+Imagine you have lots of variables and no time or interest to look into all of them in detail, to decide from a business perspective if they are important for the prediction or not. Then you can go the lazy way like me and just select the ones with the highest correlation according to an arbitary threshold (like 0.2).  
+
+```{r}
+list_varn <- cor_df %>% filter(cor_abs>0.2)
+filter_df <- data.frame(tds) %>% select(y,one_of(as.character(list_varn$varn)))
+head(filter_df)
+
+```
+
+**Correlation Matrix**
+From the most relevant variables we can generate a correlation matrix 
+
+```{r}
+corrgram(filter_df,lower.panel=panel.cor,upper.panel=panel.pie, cor.method = "pearson")
+```
+
+In general we see that all these variables are more or less correlated with each other and we would introduce a lot of multicolinearity if we just throw all of them in a model to predict y (grades). You see that schoolMS and schoolGP or Fedu(father education) and Medu(mother education) are highly correlated and it would be good if we could eliminate them, without losing their prediction power. That is exactly our use case for dimensionality reduction with PCA. Keep this matrix in mind, later on we will compare it with the principle components.
+
+Let us just run a really really naive linear regression to predict y.
+
+```{r}
+summary(lm(data = filter_df, y ~ .))
+```
+
+As you can see linear regression is "smart" enough to eliminate schoolMS as redundant information by itself. We end up with an R-square of 0.32 and five significant variables (failures, higheryes, schoolGP, studytime, Dalc) to predict grades. 
+
+# 5. Ready for PCA!
+Our data is already transformed into a format that enables us to execute *prcomp* (principle component analysis). 
+But before we do this, we remove our target variable, since we do not want to mingle this with the principle components. The plot shows us how much variance of the dataset is explained by the 1st, the 2nd ... 8th principle component. We already see that e.g. the 8th PC is really close to zero and therefore unimportant for the dataset. 
+
+```{r}
+xv <- filter_df %>% select(-y)
+pca = prcomp(xv, scale. = T, center = T)
+plot(pca, type="l")
+```
+
+# 6. Interpretation and plot results
+The beauty of R is, that many modules integrate smoothly and allow powerful analyses with a few lines of code. The tradeoff is that some things remain a blackbox, e.g. the *summary()* function is really powerful, in that you can just throw anything in there and it usually returns something meaningful. You can suspect that the power lies in the huge standardization in R, which means that depending on the class of the object I give to *summary*, the method invokes different functions (reminded me of *toString* in Java). 
+So let's throw our *prcomp* object into  *summary* and see what it produces.
+
+```{r}
+summary(pca)
+```
+We can see that the first 6 principle components togehter explain 96% of the variablity in the data. Based on this it, we can forget about PC7 and PC8. *We also see that the first three principle components represent already 65% of our data.* 
+See a graphical representation of this below.
+
+```{r}
+spca = summary(pca)
+plot(spca$importance[3,], type="l")
+```
+
+
+**Correlation Matrix**
+
+Do you still remember our first correlation matrix with all the correlation between the variables? Well the outcome of PCA is not only that we might be able to reduce the dimensionality of our data, but also that we get rid of correlation effect between explanatory variables. 
+For the matrix below I removed PC7 and PC8, as well as added our target variable.
+
+```{r}
+pca_df <- data.frame(pca$x)
+pca_df <- pca_df %>% select(-PC7,-PC8) 
+pca_df$y = filter_df$y
+
+corrgram(pca_df,lower.panel=panel.cor,upper.panel=panel.pie)
+```
+
+All of this seems correct, but can we still use this to predict the y as good as before?
+Yes, we can! Look at the R-squared, it is 0.3221 compared to 0.3223 (before PCA). 
+
+```{r}
+model <- lm(data = pca_df, y ~ .)
+summary(model)
+```
+
+
+# 7. Use PCA to plot the most important relations
+
+So PCA is good:
+
+* to reduce dimensionality, 
+* and automatically get rid of correlation effects
+
+but now we end up with cryptic variables that nobody understands and that do not really mean something. 
+However, we have some means to still understand what a PC is. Take a look at the following biplot of PC1 and PC2 (explaining 50% of the data):
+
+(credits for the biplot function crayola http://stackoverflow.com/questions/6578355/plotting-pca-biplot-with-ggplot2)
+```{r}
+PCbiplot <- function(PC, x="PC1", y="PC2") {
+    data <- data.frame( PC$x)
+    plot <- ggplot(data, aes_string(x=x, y=y))
+    datapc <- data.frame(varnames=row.names(PC$rotation), PC$rotation)
+    mult <- min(
+        (max(data[,y]) - min(data[,y])/(max(datapc[,y])-min(datapc[,y]))),
+        (max(data[,x]) - min(data[,x])/(max(datapc[,x])-min(datapc[,x])))
+        )
+    datapc <- transform(datapc,
+            v1 = .7 * mult * (get(x)),
+            v2 = .7 * mult * (get(y))
+            )
+    plot <- plot + coord_equal() + geom_text(data=datapc, aes(x=v1, y=v2, label=varnames), size = 3, vjust=1, color="darkred")
+    plot <- plot + geom_segment(data=datapc, aes(x=0, y=0, xend=v1, yend=v2), arrow=arrow(length=unit(0.2,"cm")), alpha=0.5, color="black")
+    plot
+}
+
+PCbiplot(pca)
+```
+
+
+
+# 8. Conclusion
+PCA is a powerful tool to reduce dimensionality or to get a different perspective on your data. At the same time the interpretation of results is more diffcult, but possible e.g. with the biplot. With PCA we do not lose prediction power, but we are able to eliminate collinearity. 
+For the grades in school we can say that  strive for higher education, longer studytime have a positive relation with your grades, while alcohol consumption during the week and past failures in exams indicate you have worse marks. That's not really surprising to be honest.  
+
+
+
