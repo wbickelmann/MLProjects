@@ -1,17 +1,8 @@
-library(rrcov)
 library(caret)
 library(ca)
 library(plyr)
-library(FactoMineR)
 library(tidyverse)
-library(rlist)
-library(data.table)
-library(FactoInvestigate)
-library(factoextra)
-library(mlbench)
 library(randomForest)
-
-dim(combi_a)
 combi_a<-read.csv("A_hhold_train.csv",stringsAsFactors = TRUE, header = TRUE)
 combi_a_indiv <- read.csv("A_indiv_train.csv", stringsAsFactors = TRUE, header = TRUE)
 combi_a_indiv <- subset( combi_a_indiv, select = -c(iid, poor,country ) )
@@ -40,9 +31,10 @@ combi_a<-combi_a[,-nzv]
 dim(combi_a)
 combi_a1<-cbind(combi_a,poor)
 table(combi_a1$poor)
-control <- rfeControl(functions=rfFuncs, method="cv", number=10)
+control <- rfeControl(functions=rfFuncs, method="cv", number=15)
 # run the RFE algorithm
-resultsa <- rfe(combi_a1[,1:230], combi_a1[,231], rfeControl=control)
+resultsa <- rfe(combi_a1[,1:length(colnames(combi_a1))-1], combi_a1[,length(colnames(combi_a1))], 
+                rfeControl=control)
 # summarize the results
 print(resultsa)
 # list the chosen features
@@ -52,47 +44,26 @@ plot(resultsa, type=c("g", "o"))
 summary(resultsa)
 
 combi_a1%>%select(topvarsa,'poor')->combi_a2
+
+ctrl <- safsControl(functions = rfSA)
+obja <- safs(x = combi_a2[,1:230], 
+            y = combi_a2[,231],
+            iters = 15,
+            safsControl = ctrl,
+            metric = "Accuracy",
+            method = "xgbTree")
+obja$optVariables->dfa
+combi_a2%>%select(dfa,'poor')->dfa
 Accuraciesa <- c(0.00)
 
-for (i in seq(2))
-{
   inTrain <- createDataPartition(combi_a2$poor, p = .80, list = FALSE)
-  Xtrainc<-combi_a2[inTrain,c(1:20)]
-  Ytrainc <- combi_a2[inTrain,21]
-  Xtestc <- combi_a2[-inTrain,c(1:20)]
+  Xtrainc<-combi_a2[inTrain,c(1:length(colnames(combi_a2))-1)]
+  Ytrainc <- combi_a2[inTrain,length(colnames(combi_a2))]
+  Xtestc <- combi_a2[-inTrain,c(1:length(colnames(combi_a2))-1)]
   Ytestc <- combi_a2[-inTrain,21]
   combi_a2.navg <- train(Xtrainc, 
-                         Ytrainc, method = "avNNet",
+                         Ytrainc, method = "xgbTree",
                          trControl = trainControl(method = "cv"))
-  Accuraciesa[i] <- confusionMatrix(Ytestc, 
+  Accuraciesa <- confusionMatrix(Ytestc, 
                                    predict(combi_a2.navg, newdata=Xtestc))$overall["Accuracy"]
-}
-summary(Accuraciesa)
 
-
-combi_t<-read.csv("A_hhold_test.csv",stringsAsFactors = TRUE, header = TRUE)
-combi_t_indiv <- read.csv("A_indiv_test.csv", stringsAsFactors = TRUE, header = TRUE)
-combi_t_indiv <- subset( combi_t_indiv, select = -c(iid,country ))
-combi_t_indiv <- combi_t_indiv[!duplicated(combi_t_indiv$id), ]
-
-combi_t <-inner_join(combi_t, combi_t_indiv, by='id')
-combi_t <- combi_t[, !duplicated(colnames(combi_t))]
-
-id<-data.frame(combi_t$id)
-names(id) <- ("id")
-country<-data.frame(combi_t$country)
-names(country) <- ("country")
-
-combi_t1<-select(combi_t,topvarsa)
-
-combi_a3<-combi_a2[-21]
-combi_t1 <- rbind(combi_a3[1, ], combi_t1)
-combi_t1 <- combi_t1[-1,]
-predict(combi_a2.navg,newdata=combi_t1,type='prob')->poor_pred
-aprediction<-cbind(id,country,poor_pred[2])
-names(aprediction)<-c("id","country","poor")
-View(aprediction)
-
-pred_dataframe<-rbind(aprediction,bprediction,cprediction)
-pred_dataframe<-pred_dataframe %>% mutate(poor = round(poor, 1))
-write.csv(pred_dataframe,file="submission.csv",row.names = FALSE)
